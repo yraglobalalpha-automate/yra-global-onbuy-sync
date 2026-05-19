@@ -10,7 +10,6 @@ import re
 import xml.etree.ElementTree as ET
 import base64
 import csv
-from xml.dom import minidom
 
 # ================= CONFIG =================
 EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
@@ -18,20 +17,19 @@ EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 
 # ================= SETTINGS =================
 
-# TRUE  = FULL REFRESH ALL PRODUCTS
+# TRUE = FETCH ALL PRODUCTS
 # FALSE = SMART BATCHING
 FULL_REFRESH = True
 
-# ENABLE ONLY WHEN NEEDED
-RUN_CATEGORY_MAPPING = False
+# AFTER FIRST FULL FETCH
+# CHANGE TO 12 OR 20
+MAX_PRODUCTS_PER_RUN = 12
 
-# SMART BATCH SIZE
-MAX_PRODUCTS_PER_RUN = 20
+# CATEGORY REMAP
+RUN_CATEGORY_MAPPING = True
 
-# MINIMUM PROFIT
+# PRICING
 MIN_PROFIT_PERCENT = 15
-
-# DEFAULT MARKUP
 DEFAULT_MARKUP_PERCENT = 40
 
 PK_TZ = ZoneInfo("Asia/Karachi")
@@ -54,7 +52,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(
 client = gspread.authorize(creds)
 
 sheet = client.open(
-    "YRA_OnBuy_Master"
+    "OnBuy_Feed_Master"
 ).sheet1
 
 data = sheet.get_all_records()
@@ -184,7 +182,40 @@ def clean_images(images):
         if i.strip()
     ]
 
-    return ",".join(imgs[:5])
+    return ",".join(imgs[:10])
+
+# ================= HTML SAFE LIMIT =================
+def trim_html_description(desc, limit=45000):
+
+    if not desc:
+        return ""
+
+    desc = str(desc)
+
+    desc = re.sub(
+        r"\s+",
+        " ",
+        desc
+    )
+
+    if len(desc) > limit:
+
+        desc = desc[:limit]
+
+    return desc
+
+# ================= EMPTY RESPONSE =================
+def empty_ebay_response():
+
+    return {
+        "stock": 0,
+        "price": 0,
+        "description": "",
+        "main_image": "",
+        "additional_images": "",
+        "title": "",
+        "brand": ""
+    }
 
 # ================= CATEGORY MAPPING =================
 def map_onbuy_category(
@@ -254,7 +285,7 @@ def get_ebay_token():
         "access_token"
     )
 
-# ================= FETCH EBAY DATA =================
+# ================= EBAY FETCH =================
 def get_ebay_data(url, token):
 
     try:
@@ -265,7 +296,7 @@ def get_ebay_data(url, token):
         )
 
         if not match:
-            return None
+            return empty_ebay_response()
 
         item_id = match.group(1)
 
@@ -280,14 +311,12 @@ def get_ebay_data(url, token):
             }
         )
 
+        # ================= REMOVED =================
         if res.status_code == 404:
 
             print(f"REMOVED LISTING: {item_id}")
 
-            return {
-                "stock": 0,
-                "price": 0
-            }
+            return empty_ebay_response()
 
         data = res.json()
 
@@ -305,7 +334,10 @@ def get_ebay_data(url, token):
         )
 
         if price <= 0:
-            return None
+
+            print(f"NO PRICE: {item_id}")
+
+            return empty_ebay_response()
 
         # ================= STOCK =================
         estimated = data.get(
@@ -327,10 +359,9 @@ def get_ebay_data(url, token):
                 "UNAVAILABLE"
             ]:
 
-                return {
-                    "stock": 0,
-                    "price": 0
-                }
+                print(f"OUT OF STOCK: {item_id}")
+
+                return empty_ebay_response()
 
             stock = estimated[0].get(
                 "estimatedAvailableQuantity",
@@ -341,19 +372,26 @@ def get_ebay_data(url, token):
             stock = 5
 
         # ================= DESCRIPTION =================
-        html_description = data.get(
-            "description",
-            ""
+        html_description = trim_html_description(
+            data.get(
+                "description",
+                ""
+            )
         )
 
-        # ================= IMAGES =================
+        # ================= MAIN IMAGE =================
         main_image = ""
 
         if data.get("image"):
+
             main_image = to_jpg(
-                data["image"].get("imageUrl", "")
+                data["image"].get(
+                    "imageUrl",
+                    ""
+                )
             )
 
+        # ================= ADDITIONAL IMAGES =================
         additional_images = []
 
         for img in data.get(
@@ -362,14 +400,19 @@ def get_ebay_data(url, token):
         ):
 
             img_url = to_jpg(
-                img.get("imageUrl", "")
+                img.get(
+                    "imageUrl",
+                    ""
+                )
             )
 
             if img_url:
-                additional_images.append(img_url)
+                additional_images.append(
+                    img_url
+                )
 
         additional_images = ",".join(
-            additional_images[:5]
+            additional_images[:10]
         )
 
         # ================= TITLE =================
@@ -399,9 +442,11 @@ def get_ebay_data(url, token):
                 )
 
                 if isinstance(values, list):
+
                     brand = values[0]
 
                 else:
+
                     brand = values
 
         return {
@@ -418,7 +463,7 @@ def get_ebay_data(url, token):
 
         print(f"eBay fetch error: {e}")
 
-        return None
+        return empty_ebay_response()
 
 # ================= CATEGORY MAPPING =================
 if RUN_CATEGORY_MAPPING:
@@ -486,7 +531,6 @@ print(
 token = get_ebay_token()
 
 updated_count = 0
-skipped_count = 0
 
 for idx, row in sorted_data[:MAX_PRODUCTS_PER_RUN]:
 
@@ -503,14 +547,6 @@ for idx, row in sorted_data[:MAX_PRODUCTS_PER_RUN]:
         url,
         token
     )
-
-    if not ebay_data:
-
-        skipped_count += 1
-
-        print(f"Skipped row {i}")
-
-        continue
 
     stock = ebay_data["stock"]
     cost_price = ebay_data["price"]
@@ -562,7 +598,9 @@ for idx, row in sorted_data[:MAX_PRODUCTS_PER_RUN]:
         {
             "range": f"{col_letter(col_map['Description'])}{i}",
             "values": [[
-                ebay_data["description"]
+                trim_html_description(
+                    ebay_data["description"]
+                )
             ]]
         },
         {
@@ -664,8 +702,6 @@ for row in sheet.get_all_records():
         if not all([
             sku,
             title,
-            desc,
-            image,
             category
         ]):
 
@@ -687,24 +723,37 @@ for row in sheet.get_all_records():
             "product_name"
         ).text = title[:150]
 
-        desc_elem = ET.SubElement(
+        description_element = ET.SubElement(
             product,
             "description"
         )
 
-        desc_elem.text = f"<![CDATA[{desc}]]>"
+        description_element.text = desc
 
         ET.SubElement(
             product,
             "image_url"
         ).text = image
 
+        # ================= ADDITIONAL IMAGES =================
+        additional_images_list = []
+
         if additional_images:
+
+            additional_images_list = [
+                img.strip()
+                for img in additional_images.split(",")
+                if img.strip()
+            ]
+
+        for idx, img in enumerate(
+            additional_images_list[:10]
+        ):
 
             ET.SubElement(
                 product,
-                "additional_image_urls"
-            ).text = additional_images
+                f"additional_image_url_{idx + 1}"
+            ).text = img
 
         ET.SubElement(
             product,
@@ -743,26 +792,14 @@ for row in sheet.get_all_records():
         skipped_feed += 1
 
 # ================= SAVE XML =================
-xml_str = ET.tostring(
-    root,
-    encoding='utf-8'
-)
-
-pretty_xml = minidom.parseString(
-    xml_str
-).toprettyxml(indent="  ")
-
-with open(
+ET.ElementTree(root).write(
     "feed.xml",
-    "w",
-    encoding="utf-8"
-) as f:
-
-    f.write(pretty_xml)
+    encoding="utf-8",
+    xml_declaration=True
+)
 
 # ================= FINAL LOGS =================
 print("\n✅ DONE")
 print(f"📦 Updated rows: {updated_count}")
-print(f"⏭ Skipped updates: {skipped_count}")
 print(f"📦 Feed products: {feed_count}")
 print(f"⚠ Skipped in feed: {skipped_feed}")
