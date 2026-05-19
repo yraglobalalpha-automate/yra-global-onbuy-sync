@@ -52,7 +52,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(
 client = gspread.authorize(creds)
 
 sheet = client.open(
-    "OnBuy_Feed_Master"
+    "YRA_OnBuy_Master"
 ).sheet1
 
 data = sheet.get_all_records()
