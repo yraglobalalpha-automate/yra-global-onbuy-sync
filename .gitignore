@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+_old_prototype_backup/
+
+feed.xml
+onbuy_export.csv
+*.pdf
+YRA_OnBuy_Upload.csv

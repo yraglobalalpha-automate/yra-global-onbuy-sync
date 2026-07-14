@@ -1,0 +1,63 @@
+name: YRA Sync
+
+on:
+  schedule:
+    - cron: "15 */3 * * *"   # every 3 hours at :15 (own slot: GTV runs :00, Arden :30)
+  workflow_dispatch:
+
+# A manual run and a scheduled run must never fetch at the same time - they
+# would double-spend the eBay daily call budget and interleave Sheet writes.
+concurrency:
+  group: yra-sync
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run sync
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          # AliExpress Dropshipping API (second supplier). ALI_ACCESS_TOKEN
+          # comes from the one-time authorization step - see
+          # get_aliexpress_token.py for the walkthrough.
+          ALI_APP_KEY: ${{ secrets.ALI_APP_KEY }}
+          ALI_APP_SECRET: ${{ secrets.ALI_APP_SECRET }}
+          ALI_ACCESS_TOKEN: ${{ secrets.ALI_ACCESS_TOKEN }}
+          # Defaults to "YRA_Feed_Master" if unset - set this Variable if
+          # the Google Sheet is named something else.
+          SHEET_NAME: ${{ vars.SHEET_NAME }}
+          # Batch size scales automatically from these two - RUNS_PER_DAY
+          # must match the cron above (every 3h = 8/day).
+          EBAY_DAILY_CALL_BUDGET: ${{ vars.EBAY_DAILY_CALL_BUDGET }}
+          RUNS_PER_DAY: ${{ vars.RUNS_PER_DAY }}
+          MAX_PRODUCTS_PER_RUN: ${{ vars.MAX_PRODUCTS_PER_RUN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_FEED_BUCKET: ${{ vars.SUPABASE_FEED_BUCKET }}
+          # Email alerts - works with Resend (SMTP_HOST=smtp.resend.com,
+          # SMTP_USER=resend, SMTP_APP_PASSWORD=<API key>, ALERT_EMAIL_FROM=
+          # <verified sender>) or Gmail (just SMTP_USER + app password).
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          ALERT_EMAIL_FROM: ${{ vars.ALERT_EMAIL_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+        run: python generate_xml.py
