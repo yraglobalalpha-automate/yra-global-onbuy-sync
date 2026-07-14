@@ -602,11 +602,21 @@ def get_ebay_data(url, token, variant_choice=""):
     estimated = data.get("estimatedAvailabilities", [])
     stock = 5
     if estimated:
-        status = estimated[0].get("estimatedAvailabilityStatus", "")
+        est = estimated[0]
+        status = est.get("estimatedAvailabilityStatus", "")
         if status in ("OUT_OF_STOCK", "UNAVAILABLE"):
             logger.info("OUT OF STOCK: %s", item_id)
             return False, empty_ebay_response()
-        stock = estimated[0].get("estimatedAvailableQuantity", 5)
+        stock = est.get("estimatedAvailableQuantity")
+        if not stock:
+            # eBay hides the exact count above a threshold - the listing
+            # shows "More than 10 available" and the API sends only
+            # availabilityThresholdType=MORE_THAN + the threshold, no
+            # quantity. Use that known floor ("at least 10") rather than
+            # a made-up number; never inflate past what eBay confirms -
+            # overselling is the costlier mistake.
+            if str(est.get("availabilityThresholdType") or "") == "MORE_THAN":
+                stock = est.get("estimatedAvailabilityThreshold") or 0
     if not stock or stock <= 0:
         stock = 5
 
