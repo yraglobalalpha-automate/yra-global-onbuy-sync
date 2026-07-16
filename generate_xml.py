@@ -843,7 +843,28 @@ def main():
     # slots in a run, so none of the 376 real rows were even reached).
     # Filtering them out before the sort/slice means batch capacity is only
     # ever spent on rows that can actually make progress.
-    processable = [(idx, row) for idx, row in enumerate(data) if detect_supplier(row.get("Supplier URL", ""))]
+    # ================= REMOVE-TICKED ROWS (whole sheet) =================
+    # An employee ticks the "Remove" column to delete a product permanently
+    # (rule: deactivate it on OnBuy first if it was ever uploaded). The run
+    # does the deleting at its safe end-of-run moment - Supabase first, Sheet
+    # rows in descending order - so nobody hand-deletes rows and risks the
+    # mid-run row-shift accident again. Unticked checkbox reads "FALSE",
+    # which must never match.
+    _REMOVE_TRUTHY = {"TRUE", "YES", "1", "DONE", "X", "REMOVE"}
+    removal_rows = set()
+    removal_skus = []
+    for _idx, _row in enumerate(data):
+        if str(_row.get("Remove") or "").strip().upper() in _REMOVE_TRUTHY:
+            removal_rows.add(_idx + 2)
+            _sku = str(_row.get("SKU") or "").strip()
+            if _sku:
+                removal_skus.append(_sku)
+    if removal_rows:
+        logger.info("Remove ticked on %d row(s) - they will be deleted at the end of this run (SKUs: %s)",
+                    len(removal_rows), ", ".join(removal_skus) or "none")
+
+    processable = [(idx, row) for idx, row in enumerate(data)
+                   if (idx + 2) not in removal_rows and detect_supplier(row.get("Supplier URL", ""))]
     skipped_incomplete = len(data) - len(processable)
     if skipped_incomplete:
         logger.info("Skipping %d row(s) with no usable Supplier URL yet (eBay/AliExpress) - not counted against this run's batch", skipped_incomplete)
@@ -1569,6 +1590,8 @@ def main():
     # be retried (and re-rejected, re-detected, re-deleted) next run; the
     # reverse order would risk a permanently orphaned Supabase row with no
     # Sheet row left to ever trigger cleaning it up.
+    rows_to_delete.extend(removal_rows)
+    removed_skus.extend(removal_skus)
     if rows_to_delete:
         supabase_db.delete_products(removed_skus)
         delete_requests = [
@@ -1592,8 +1615,8 @@ def main():
                 max_attempts=3,
             )
             logger.info(
-                "Removed %d row(s) entirely - brand owned by another seller (SKUs: %s)",
-                len(rows_to_delete), ", ".join(removed_skus),
+                "Removed %d row(s) entirely - Remove ticked or brand-rejected (SKUs: %s)",
+                len(set(rows_to_delete)), ", ".join(removed_skus),
             )
         except Exception as exc:
             run_had_errors = True
@@ -1663,8 +1686,9 @@ def main():
     logger.info("DONE")
     logger.info("Updated rows: %d", updated_count)
     logger.info("Change alerts raised: %d, variants needing a choice: %d, unreadable links: %d, "
-                "missing SKUs: %d, duplicate SKUs: %d",
-                len(change_log), variant_rows, unreadable_rows, missing_sku_rows, duplicate_sku_rows_flagged)
+                "missing SKUs: %d, duplicate SKUs: %d, rows removed by request: %d",
+                len(change_log), variant_rows, unreadable_rows, missing_sku_rows,
+                duplicate_sku_rows_flagged, len(removal_rows))
     logger.info("OnBuy: %d created, %d updated, %d deferred (awaiting go-live), %d postponed (transient), "
                  "%d failed, %d removed (brand rejected)",
                  onbuy_created, onbuy_updated, onbuy_deferred, onbuy_postponed, onbuy_failed, onbuy_removed)
@@ -1674,15 +1698,15 @@ def main():
     logger.info("Feed URL: %s", feed_url or "(not uploaded - see SUPABASE_URL/SUPABASE_SERVICE_KEY)")
     logger.info("Supabase database export: %s (%d rows)", "OK" if supabase_ok else "skipped/failed", len(supabase_rows))
 
-    if fetch_failures >= FETCH_FAILURE_ALERT_THRESHOLD or onbuy_failed > 0 or onbuy_removed > 0 or onbuy_postponed > 0:
+    if fetch_failures >= FETCH_FAILURE_ALERT_THRESHOLD or onbuy_failed > 0 or onbuy_removed > 0 or onbuy_postponed > 0 or removal_rows:
         notify.send_alert_email(
-            "Sync run finished with errors" if (fetch_failures or onbuy_failed or onbuy_postponed) else "Sync run removed brand-rejected product(s)",
+            "Sync run finished with errors" if (fetch_failures or onbuy_failed or onbuy_postponed) else "Sync run removed product row(s)",
             f"eBay fetch failures: {fetch_failures}\n"
             f"OnBuy push failures: {onbuy_failed} (created {onbuy_created}, updated {onbuy_updated}, "
             f"deferred awaiting go-live {onbuy_deferred})\n"
             f"OnBuy pushes postponed (rate limit/token/network - auto-retried next run): {onbuy_postponed}"
             + (f" - pushing halted early: {onbuy_halt_reason}" if onbuy_halt_reason else "") + "\n"
-            f"Rows removed (brand owned by another seller): {onbuy_removed}"
+            f"Rows removed (Remove column or brand-rejected): {len(set(rows_to_delete))}"
             + (f" - SKUs: {', '.join(removed_skus)}" if removed_skus else "") + "\n"
             f"Updated rows: {updated_count}\n"
             f"Feed products: {feed_count}, skipped: {skipped_feed}\n"

@@ -47,6 +47,12 @@ be switched on by any secret or variable.
    no Category yet are skipped and named in the run log (fix, re-export).
    After uploading in OnBuy's seller portal, mark the rows
    `Exported to OnBuy = TRUE`.
+5. **Removing a product permanently**: deactivate it on OnBuy first (if it
+   was ever uploaded), then tick the **`Remove`** column on the row - the
+   next run deletes it from the Sheet and the Supabase backup together,
+   always at a safe moment (never hand-delete rows; a run may be writing).
+   Keep out-of-stock rows instead of removing them when the product might
+   return - a kept row raises a BACK IN STOCK alert on restock.
 
 **Variant products are ON HOLD** (store decision 2026-07-13): the feature
 is fully built and locally tested — Variant Choice matching, `?var=`/
