@@ -555,30 +555,28 @@ def get_ebay_data(url, token, variant_choice=""):
         if resp.status_code == 404:
             return None  # confirmed removed - a real signal, not an error
         if resp.status_code == 400 and _is_item_group_error(resp):
-            if not VARIANTS_ENABLED:
-                # Variants on hold - don't even fetch the group.
-                return "VARIANT_DISABLED"
             return {"__item_group__": _fetch_item_group(item_id, token)}
         raise_for_status(resp, what=f"ebay item {item_id}")
         return resp.json()
 
     data = with_retry(_do_fetch, what=f"ebay item {item_id}", max_attempts=3)
 
-    if data == "VARIANT_DISABLED":
-        logger.info("VARIANT LINK (variants on hold): %s", item_id)
-        result = empty_ebay_response()
-        result["is_variant"] = True
-        result["variant_reason"] = "disabled"
-        return False, result
-
     variant_group, variant_detail = "", ""
     if isinstance(data, dict) and "__item_group__" in data:
+        # Mirrors the AliExpress behavior in both modes: a "group" listing
+        # with effectively one variation is just a product; a link that
+        # names its variation (?var=) resolves to it; and with variants on
+        # hold, anything the link can't settle gets flagged WITH the option
+        # list (Variant Choice matching stays enabled-mode only).
         group = data["__item_group__"]
-        chosen, extra = _resolve_group_variation(group, item_id, var_id, variant_choice)
+        chosen, extra = _resolve_group_variation(
+            group, item_id, var_id, variant_choice if VARIANTS_ENABLED else "")
         if chosen is None and extra is None:
             logger.info("REMOVED LISTING (empty variation group): %s", item_id)
             return False, empty_ebay_response()
         if chosen is None:
+            if not VARIANTS_ENABLED:
+                extra["variant_reason"] = "disabled"
             logger.info("VARIANT NEEDS A CHOICE: %s", item_id)
             return False, extra
         if not chosen.get("description"):
@@ -586,7 +584,10 @@ def get_ebay_data(url, token, variant_choice=""):
                 if chosen.get("itemId") in common.get("itemIds", []):
                     chosen["description"] = common.get("description", "")
                     break
-        variant_group, variant_detail = item_id, extra
+        if VARIANTS_ENABLED:
+            variant_group, variant_detail = item_id, extra
+        elif extra:
+            logger.info("MULTI-VARIATION LISTING RESOLVED AS SINGLE (variants on hold): %s", item_id)
         data = chosen
 
     if data is None:
