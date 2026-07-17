@@ -94,12 +94,20 @@ _ITEM_ID_PATTERNS = (
 )
 
 _SKU_ID_PATTERN = re.compile(r"[?&]sku_?[iI]d=(\d{6,})")
+# Links copied from search/product pages also embed the viewed SKU's id
+# inside the pdp_npi tracking blob, delimited by "!" (encoded %21). SKU ids
+# start with 12000..., so they can't be confused with product ids (1005...)
+# or the prices that share the blob.
+_SKU_ID_EMBEDDED = re.compile(r"(?:%21|!)(12000\d{6,})(?:%21|!)")
 
 
 def extract_sku_id(url):
-    """Some AliExpress links carry the selected option's own id (sku_id) -
-    when present it picks the variant directly, no Variant Choice needed."""
+    """The id of the exact SKU the link points at, when the link carries one
+    (a clean sku_id= param, or embedded in the pdp tracking blob)."""
     match = _SKU_ID_PATTERN.search(str(url))
+    if match:
+        return match.group(1)
+    match = _SKU_ID_EMBEDDED.search(str(url))
     return match.group(1) if match else None
 
 
@@ -216,12 +224,29 @@ def get_aliexpress_data(url, variant_choice="", variants_enabled=True):
     variant_group, variant_detail, sku_image = "", "", ""
     sku = skus[0] if skus else {}
     if len(skus) > 1 and not variants_enabled:
-        logger.info("VARIANT LINK (variants on hold): aliexpress %s", product_id)
-        data = empty_response()
-        data["is_variant"] = True
-        data["variant_reason"] = "disabled"
-        return False, data
-    if len(skus) > 1:
+        # Variants are on hold, but plenty of AliExpress listings are
+        # multi-SKU without looking it - hidden "Ships From"/pack-quantity
+        # pseudo-options the page never shows as pickers. The pasted link
+        # usually embeds the exact SKU the employee was viewing: honor it
+        # and treat the row as a plain single product (no grouping, no
+        # variant columns). Only flag when the link truly can't say which
+        # SKU it means - and then SHOW the options, so it's never a mystery.
+        url_sku_id = extract_sku_id(url)
+        chosen = next((s for s in skus if str(s.get("sku_id") or "") == url_sku_id),
+                      None) if url_sku_id else None
+        if chosen is None:
+            candidates = [(i, [v for _, v, _ in _sku_properties(s)]) for i, s in enumerate(skus)]
+            logger.info("VARIANT LINK (variants on hold, link names no sku): aliexpress %s", product_id)
+            data = empty_response()
+            data["is_variant"] = True
+            data["variant_reason"] = "disabled"
+            data["variant_options"] = options_text(candidates)
+            return False, data
+        logger.info("MULTI-SKU LINK RESOLVED BY ITS OWN SKU ID (variants on hold): aliexpress %s sku %s",
+                    product_id, url_sku_id)
+        sku = chosen
+        sku_image = next((img for _, _, img in _sku_properties(sku) if img), "")
+    elif len(skus) > 1:
         candidates = [(i, [v for _, v, _ in _sku_properties(s)]) for i, s in enumerate(skus)]
         chosen_idx, reason = None, None
         url_sku_id = extract_sku_id(url)

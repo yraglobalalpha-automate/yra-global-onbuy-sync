@@ -1050,9 +1050,16 @@ def main():
             options = ebay_data.get("variant_options") or ""
             reason = ebay_data.get("variant_reason") or "missing"
             if reason == "disabled":
-                # Variants on hold - same flag wording as before the feature.
+                # Variants on hold. When the supplier told us what the hidden
+                # options are, show them - a "no variants!" page can still be
+                # multi-SKU underneath (Ships From, pack quantity).
                 status_text = "VARIANT - NOT SUPPORTED"
-                alert_text = "VARIANT LINK - replace with a single-product link (no colour/size options)"
+                if options:
+                    alert_text = ("VARIANT LINK - this listing has options underneath (" + options + "). "
+                                  "Open the product page, pick one, and copy the address-bar link again - "
+                                  "or replace with a single-product link")[:1500]
+                else:
+                    alert_text = "VARIANT LINK - replace with a single-product link (no colour/size options)"
             elif reason == "ambiguous":
                 status_text = "CHOOSE VARIANT"
                 alert_text = ("VARIANT CHOICE MATCHES MORE THAN ONE OPTION - make 'Variant Choice' more "
