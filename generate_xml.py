@@ -909,16 +909,20 @@ def main():
             )
             sys.exit(1)
     if "AliExpress" in batch_suppliers and not ali_ready():
-        run_had_errors = True
-        logger.error(
+        # Not a run failure: a store can be eBay-only on purpose (keys not
+        # set up yet) while employees paste AliExpress links anyway. Those
+        # rows get flagged amber on the sheet below - failing the whole run
+        # every 3 hours just buries real failures under alarm fatigue.
+        logger.warning(
             "Batch contains AliExpress rows but ALI_APP_KEY/ALI_APP_SECRET/ALI_ACCESS_TOKEN "
-            "are not all set - those rows will be left untouched this run")
+            "are not all set - those rows are flagged on the sheet until the keys exist")
 
     updated_count = 0
     change_log = []  # (sku, note) per change an employee must apply on OnBuy - emailed after the run
     variant_rows = 0  # multi-variation links flagged for replacement this run
     unreadable_rows = 0  # supplier links with no readable product id, flagged for replacement
     missing_sku_rows = 0  # rows with a working link but no SKU yet, flagged for filling in
+    ali_unconfigured_rows = 0  # AliExpress rows on a store whose Ali keys aren't set up
     duplicate_sku_rows_flagged = 0  # rows whose SKU digits repeat an earlier row's barcode
 
     # ================= DUPLICATE SKU DETECTION (whole sheet, by digits) =================
@@ -1000,7 +1004,29 @@ def main():
         if supplier is None:
             continue
         if supplier == "AliExpress" and not ali_ready():
-            continue  # secrets missing - already logged once above; leave the row untouched
+            # Flag it ON THE ROW like every other fix-me state, and stamp
+            # Last Checked Time - unstamped rows never age out of "oldest
+            # first" and permanently hog the front of every batch (the
+            # starvation lesson, AliExpress edition: 57 of 125 slots were
+            # burning on untouched rows before this). Self-heals: once the
+            # keys exist, ali_ready() is true and the row processes.
+            ali_unconfigured_rows += 1
+            now_str = datetime.now(PK_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            ali_updates = [
+                {"range": f"{col_letter(col_map['Status'])}{i}", "values": [["ALIEXPRESS NOT CONNECTED"]]},
+                {"range": f"{col_letter(col_map['Last Checked Time'])}{i}", "values": [[now_str]]},
+            ]
+            if "Supplier" in col_map:
+                ali_updates.append({"range": f"{col_letter(col_map['Supplier'])}{i}", "values": [[supplier]]})
+            if "Change Alert" in col_map:
+                ali_updates.append({"range": f"{col_letter(col_map['Change Alert'])}{i}",
+                                    "values": [["AliExpress is not connected on this store yet - use an eBay "
+                                                "link for this product, or ask for the AliExpress keys to be added"]]})
+            if "Change Time" in col_map:
+                ali_updates.append({"range": f"{col_letter(col_map['Change Time'])}{i}", "values": [[now_str]]})
+            all_sheet_updates.extend(ali_updates)
+            highlight_requests.append(row_highlight_request(sheet.id, i, num_cols, active=True, pending_change=True))
+            continue
 
         if i in duplicate_sku_rows:
             # Flagged before fetching - a duplicate barcode can never go to
@@ -1694,9 +1720,10 @@ def main():
     logger.info("DONE")
     logger.info("Updated rows: %d", updated_count)
     logger.info("Change alerts raised: %d, variants needing a choice: %d, unreadable links: %d, "
-                "missing SKUs: %d, duplicate SKUs: %d, rows removed by request: %d",
+                "missing SKUs: %d, duplicate SKUs: %d, rows removed by request: %d, "
+                "AliExpress rows awaiting keys: %d",
                 len(change_log), variant_rows, unreadable_rows, missing_sku_rows,
-                duplicate_sku_rows_flagged, len(removal_rows))
+                duplicate_sku_rows_flagged, len(removal_rows), ali_unconfigured_rows)
     logger.info("OnBuy: %d created, %d updated, %d deferred (awaiting go-live), %d postponed (transient), "
                  "%d failed, %d removed (brand rejected)",
                  onbuy_created, onbuy_updated, onbuy_deferred, onbuy_postponed, onbuy_failed, onbuy_removed)
