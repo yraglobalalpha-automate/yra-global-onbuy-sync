@@ -18,7 +18,7 @@ import notify
 import pricing
 import storage
 import supabase_db
-from aliexpress_client import ali_ready, get_aliexpress_data
+from aliexpress_client import ali_ready, extract_product_id, extract_sku_id, get_aliexpress_data
 from variant_match import match_variant_choice, options_text
 from onbuy_client import OnBuyClient
 from retry_utils import AuthError, PermanentError, RateLimitError, TransientError, raise_for_status, with_retry
@@ -923,6 +923,7 @@ def main():
     unreadable_rows = 0  # supplier links with no readable product id, flagged for replacement
     missing_sku_rows = 0  # rows with a working link but no SKU yet, flagged for filling in
     ali_unconfigured_rows = 0  # AliExpress rows on a store whose Ali keys aren't set up
+    duplicate_link_rows_flagged = 0  # rows repeating an earlier row's supplier product
     duplicate_sku_rows_flagged = 0  # rows whose SKU digits repeat an earlier row's barcode
 
     # ================= DUPLICATE SKU DETECTION (whole sheet, by digits) =================
@@ -944,6 +945,36 @@ def main():
             duplicate_sku_rows[_rownum] = (_digits, first_row_by_digits[_digits])
         else:
             first_row_by_digits[_digits] = _rownum
+
+    # ================= DUPLICATE LINK DETECTION (whole sheet) =================
+    # Sibling of the duplicate-SKU guard for the OTHER copy-paste mistake:
+    # the same supplier product pasted on several rows, each with its own
+    # barcode - the SKU guard can't see it, and OnBuy would end up with
+    # duplicate listings of one product. Keyed statically (no API calls) on
+    # supplier + product id + the exact version the link names (sku_id/var),
+    # so two different versions of one listing are legitimately allowed.
+    first_row_by_link = {}
+    duplicate_link_rows = {}  # sheet row number -> row number of the original
+    for _idx, _row in enumerate(data):
+        _url = str(_row.get("Supplier URL") or "").strip()
+        _sup = detect_supplier(_url)
+        _key = None
+        if _sup == "eBay":
+            _m = re.search(r"/itm/(\d+)", _url)
+            if _m:
+                _v = re.search(r"[?&]var=(\d+)", _url)
+                _key = ("eBay", _m.group(1), _v.group(1) if _v else "")
+        elif _sup == "AliExpress":
+            _pid = extract_product_id(_url)
+            if _pid:
+                _key = ("AliExpress", _pid, extract_sku_id(_url) or "")
+        if _key is None:
+            continue
+        _rownum = _idx + 2
+        if _key in first_row_by_link:
+            duplicate_link_rows[_rownum] = first_row_by_link[_key]
+        else:
+            first_row_by_link[_key] = _rownum
     onbuy_created = 0
     onbuy_updated = 0
     onbuy_failed = 0
@@ -1051,6 +1082,30 @@ def main():
             highlight_requests.append(row_highlight_request(sheet.id, i, num_cols, active=True, pending_change=True))
             logger.warning("Row %d: SKU digits %s duplicate row %d - flagged DUPLICATE SKU and skipped",
                            i, dup_digits, original_row)
+            continue
+
+        if i in duplicate_link_rows:
+            # Same supplier product as an earlier row - flagged before any
+            # fetch, original row keeps working normally.
+            link_original = duplicate_link_rows[i]
+            duplicate_link_rows_flagged += 1
+            now_str = datetime.now(PK_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            dupl_updates = [
+                {"range": f"{col_letter(col_map['Status'])}{i}", "values": [["DUPLICATE LINK"]]},
+                {"range": f"{col_letter(col_map['Last Checked Time'])}{i}", "values": [[now_str]]},
+            ]
+            if "Supplier" in col_map:
+                dupl_updates.append({"range": f"{col_letter(col_map['Supplier'])}{i}", "values": [[supplier]]})
+            if "Change Alert" in col_map:
+                dupl_updates.append({"range": f"{col_letter(col_map['Change Alert'])}{i}",
+                                     "values": [[f"DUPLICATE LINK - this is the same supplier product as row {link_original}. "
+                                                 "A product may only be listed once - remove this row or change its link"]]})
+            if "Change Time" in col_map:
+                dupl_updates.append({"range": f"{col_letter(col_map['Change Time'])}{i}", "values": [[now_str]]})
+            all_sheet_updates.extend(dupl_updates)
+            highlight_requests.append(row_highlight_request(sheet.id, i, num_cols, active=True, pending_change=True))
+            logger.warning("Row %d: same supplier product as row %d - flagged DUPLICATE LINK and skipped",
+                           i, link_original)
             continue
 
         variant_choice = str(row.get("Variant Choice") or "").strip() if VARIANTS_ENABLED else ""
@@ -1720,10 +1775,10 @@ def main():
     logger.info("DONE")
     logger.info("Updated rows: %d", updated_count)
     logger.info("Change alerts raised: %d, variants needing a choice: %d, unreadable links: %d, "
-                "missing SKUs: %d, duplicate SKUs: %d, rows removed by request: %d, "
+                "missing SKUs: %d, duplicate SKUs: %d, duplicate links: %d, rows removed by request: %d, "
                 "AliExpress rows awaiting keys: %d",
                 len(change_log), variant_rows, unreadable_rows, missing_sku_rows,
-                duplicate_sku_rows_flagged, len(removal_rows), ali_unconfigured_rows)
+                duplicate_sku_rows_flagged, duplicate_link_rows_flagged, len(removal_rows), ali_unconfigured_rows)
     logger.info("OnBuy: %d created, %d updated, %d deferred (awaiting go-live), %d postponed (transient), "
                  "%d failed, %d removed (brand rejected)",
                  onbuy_created, onbuy_updated, onbuy_deferred, onbuy_postponed, onbuy_failed, onbuy_removed)
