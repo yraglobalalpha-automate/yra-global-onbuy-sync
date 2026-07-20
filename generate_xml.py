@@ -924,6 +924,7 @@ def main():
     missing_sku_rows = 0  # rows with a working link but no SKU yet, flagged for filling in
     ali_unconfigured_rows = 0  # AliExpress rows on a store whose Ali keys aren't set up
     duplicate_link_rows_flagged = 0  # rows repeating an earlier row's supplier product
+    invalid_sku_rows = 0  # SKUs whose digits fail the GS1 check-digit test
     duplicate_sku_rows_flagged = 0  # rows whose SKU digits repeat an earlier row's barcode
 
     # ================= DUPLICATE SKU DETECTION (whole sheet, by digits) =================
@@ -1108,6 +1109,58 @@ def main():
                            i, link_original)
             continue
 
+        # SKU checks run BEFORE the supplier fetch: a row that cannot export
+        # should not spend an API call every run (56 zero-stripped barcodes
+        # were burning ~450 calls/day of a 1,000/day budget when this sat
+        # after the fetch).
+        sku = str(row.get("SKU") or "").strip()
+        if not sku:
+            # Flag it ON THE ROW, not just in the log, and stamp Last
+            # Checked Time so these rows age through batch rotation
+            # (starvation lesson).
+            missing_sku_rows += 1
+            now_str = datetime.now(PK_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            sku_updates = [
+                {"range": f"{col_letter(col_map['Status'])}{i}", "values": [["MISSING SKU"]]},
+                {"range": f"{col_letter(col_map['Last Checked Time'])}{i}", "values": [[now_str]]},
+            ]
+            if "Supplier" in col_map:
+                sku_updates.append({"range": f"{col_letter(col_map['Supplier'])}{i}", "values": [[supplier]]})
+            if "Change Alert" in col_map:
+                sku_updates.append({"range": f"{col_letter(col_map['Change Alert'])}{i}",
+                                    "values": [["ADD SKU - this row needs its own unique UPC barcode in the SKU column"]]})
+            if "Change Time" in col_map:
+                sku_updates.append({"range": f"{col_letter(col_map['Change Time'])}{i}", "values": [[now_str]]})
+            all_sheet_updates.extend(sku_updates)
+            highlight_requests.append(row_highlight_request(sheet.id, i, num_cols, active=True, pending_change=True))
+            logger.warning("Row %d: no SKU provided - flagged MISSING SKU (OnBuy requires a unique SKU per product)", i)
+            continue
+        if not is_valid_gtin(sku_numeric_part(sku)):
+            # A number that fails the GS1 check digit would be rejected by
+            # OnBuy at upload - surface it within one sync cycle instead of
+            # at export day. Commonest cause in practice is not invention:
+            # Google Sheets strips leading zeros off digit-only cells.
+            invalid_sku_rows += 1
+            now_str = datetime.now(PK_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            inv_updates = [
+                {"range": f"{col_letter(col_map['Status'])}{i}", "values": [["INVALID SKU"]]},
+                {"range": f"{col_letter(col_map['Last Checked Time'])}{i}", "values": [[now_str]]},
+            ]
+            if "Supplier" in col_map:
+                inv_updates.append({"range": f"{col_letter(col_map['Supplier'])}{i}", "values": [[supplier]]})
+            if "Change Alert" in col_map:
+                inv_updates.append({"range": f"{col_letter(col_map['Change Alert'])}{i}",
+                                    "values": [[f"INVALID SKU - '{sku}' is not a real barcode (must be 8, 12, 13 or 14 "
+                                                "digits ending in a correct check digit). If the number looks right, "
+                                                "leading zeros were probably stripped - format the SKU column as "
+                                                "Plain text and re-type it with its zeros"]]})
+            if "Change Time" in col_map:
+                inv_updates.append({"range": f"{col_letter(col_map['Change Time'])}{i}", "values": [[now_str]]})
+            all_sheet_updates.extend(inv_updates)
+            highlight_requests.append(row_highlight_request(sheet.id, i, num_cols, active=True, pending_change=True))
+            logger.warning("Row %d: SKU %s fails the barcode check - flagged INVALID SKU and skipped", i, sku)
+            continue
+
         variant_choice = str(row.get("Variant Choice") or "").strip() if VARIANTS_ENABLED else ""
 
         try:
@@ -1226,31 +1279,6 @@ def main():
         # ================= SKU (must be entered manually - OnBuy requires unique
         # SKUs, and two different sourcing links can share the same barcode/item
         # ID, so auto-deriving one risks a collision between two real products) ==
-        sku = str(row.get("SKU") or "").strip()
-        if not sku:
-            # Flag it ON THE ROW, not just in the log - a silently skipped
-            # row keeps whatever text was last written to it (e.g. a stale
-            # CHOOSE VARIANT alert), which reads as the system being stuck.
-            # Stamp Last Checked Time so these rows also age through batch
-            # rotation instead of burning a fetch call at the front of every
-            # run (same starvation lesson as URL-less rows).
-            missing_sku_rows += 1
-            now_str = datetime.now(PK_TZ).strftime("%Y-%m-%d %H:%M:%S")
-            sku_updates = [
-                {"range": f"{col_letter(col_map['Status'])}{i}", "values": [["MISSING SKU"]]},
-                {"range": f"{col_letter(col_map['Last Checked Time'])}{i}", "values": [[now_str]]},
-            ]
-            if "Supplier" in col_map:
-                sku_updates.append({"range": f"{col_letter(col_map['Supplier'])}{i}", "values": [[supplier]]})
-            if "Change Alert" in col_map:
-                sku_updates.append({"range": f"{col_letter(col_map['Change Alert'])}{i}",
-                                    "values": [["ADD SKU - this row needs its own unique UPC barcode in the SKU column"]]})
-            if "Change Time" in col_map:
-                sku_updates.append({"range": f"{col_letter(col_map['Change Time'])}{i}", "values": [[now_str]]})
-            all_sheet_updates.extend(sku_updates)
-            highlight_requests.append(row_highlight_request(sheet.id, i, num_cols, active=True, pending_change=True))
-            logger.warning("Row %d: no SKU provided - flagged MISSING SKU (OnBuy requires a unique SKU per product)", i)
-            continue
 
         # ================= CATEGORY (re-checked here with fresh title/description so a
         # brand-new row gets categorized on this same pass, not just the upfront
@@ -1775,9 +1803,9 @@ def main():
     logger.info("DONE")
     logger.info("Updated rows: %d", updated_count)
     logger.info("Change alerts raised: %d, variants needing a choice: %d, unreadable links: %d, "
-                "missing SKUs: %d, duplicate SKUs: %d, duplicate links: %d, rows removed by request: %d, "
-                "AliExpress rows awaiting keys: %d",
-                len(change_log), variant_rows, unreadable_rows, missing_sku_rows,
+                "missing SKUs: %d, invalid SKUs: %d, duplicate SKUs: %d, duplicate links: %d, "
+                "rows removed by request: %d, AliExpress rows awaiting keys: %d",
+                len(change_log), variant_rows, unreadable_rows, missing_sku_rows, invalid_sku_rows,
                 duplicate_sku_rows_flagged, duplicate_link_rows_flagged, len(removal_rows), ali_unconfigured_rows)
     logger.info("OnBuy: %d created, %d updated, %d deferred (awaiting go-live), %d postponed (transient), "
                  "%d failed, %d removed (brand rejected)",
