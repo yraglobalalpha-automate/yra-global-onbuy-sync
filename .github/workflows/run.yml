@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "15 */3 * * *"   # every 3 hours at :15 (own slot: GTV runs :00, Arden :30)
   workflow_dispatch:
+    inputs:
+      max_products:
+        description: "One-off batch size override - e.g. 1300 to sweep the whole sheet in this single run (scheduled runs keep the normal batch)"
+        required: false
+        default: ""
 
 # A manual run and a scheduled run must never fetch at the same time - they
 # would double-spend the eBay daily call budget and interleave Sheet writes.
@@ -47,7 +52,7 @@ jobs:
           # must match the cron above (every 3h = 8/day).
           EBAY_DAILY_CALL_BUDGET: ${{ vars.EBAY_DAILY_CALL_BUDGET }}
           RUNS_PER_DAY: ${{ vars.RUNS_PER_DAY }}
-          MAX_PRODUCTS_PER_RUN: ${{ vars.MAX_PRODUCTS_PER_RUN }}
+          MAX_PRODUCTS_PER_RUN: ${{ inputs.max_products || vars.MAX_PRODUCTS_PER_RUN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SUPABASE_FEED_BUCKET: ${{ vars.SUPABASE_FEED_BUCKET }}
