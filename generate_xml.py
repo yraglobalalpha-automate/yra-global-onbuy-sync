@@ -1349,7 +1349,12 @@ def main():
                 change_notes.append("OUT OF STOCK - deactivate on OnBuy")
             elif old_stock == 0 and stock > 0 and old_selling > 0:
                 change_notes.append(f"BACK IN STOCK ({stock}) - reactivate on OnBuy")
-            if stock > 0 and old_selling > 0 and selling_price > 0 and abs(selling_price - old_selling) >= 0.01:
+            # AliExpress prices wobble constantly (flash deals, currency) -
+            # price alerts for those rows are noise by user policy
+            # (2026-07-21): only stock alerts matter there. eBay rows keep
+            # price alerts; the Sheet price itself still updates for both.
+            if stock > 0 and old_selling > 0 and selling_price > 0 \
+                    and abs(selling_price - old_selling) >= 0.01 and supplier != "AliExpress":
                 change_notes.append(f"PRICE £{old_selling:.2f} -> £{selling_price:.2f} - update on OnBuy")
 
         applied_ticked = str(row.get("Applied on OnBuy") or "").strip().upper() in ("TRUE", "YES", "1", "DONE")

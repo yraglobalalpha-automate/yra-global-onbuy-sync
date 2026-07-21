@@ -28,9 +28,12 @@ OnBuy's model, from the template's Explanation tab):
 
 What gets exported:
 - Only rows with Status ACTIVE (in stock) and a Title (fully fetched).
-- Rows already marked "Exported to OnBuy" = TRUE are skipped, so each export
-  contains only new products. Mark rows TRUE after uploading - this script
-  never writes to the Sheet. (Parent rows are re-emitted whenever any of
+- Rows already marked "Exported to OnBuy" = TRUE are skipped, AND this
+  script now marks every row it exports automatically - so each export
+  contains only products never seen in an upload file before. Only run the
+  export when you intend to upload the result; if a file is lost before
+  uploading, re-download it from that run's artifact (kept ~90 days)
+  instead of re-exporting. (Parent rows are re-emitted whenever any of
   their group exports - re-uploading a parent is a harmless update.)
 - Rows failing the GS1/UPC check-digit test on their SKU, or missing a
   Category, are SKIPPED and listed at the end (OnBuy would reject them).
@@ -63,7 +66,8 @@ import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-from generate_xml import SHEET_NAME, detect_supplier, is_valid_gtin, sku_numeric_part
+from generate_xml import SHEET_NAME, col_letter, detect_supplier, is_valid_gtin, sku_numeric_part
+from retry_utils import with_retry
 
 OUTPUT_FILE = "YRA_OnBuy_Upload.csv"
 
@@ -195,7 +199,8 @@ def main():
     creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    data = client.open(SHEET_NAME).sheet1.get_all_records()
+    sheet = client.open(SHEET_NAME).sheet1
+    data = sheet.get_all_records()
     # Strip header whitespace - same hygiene as generate_xml.py, so a "SKU "
     # header cell can't silently blank out a column here either.
     data = [{str(k).strip(): v for k, v in row.items()} for row in data]
@@ -210,11 +215,12 @@ def main():
     extra_axes = []
     emitted_parents = set()
     seen_digits = set()
+    exported_rownums = []  # sheet rows written to the CSV - marked exported below
 
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(HEADERS)
-        for row in data:
+        for _idx, row in enumerate(data):
             sku = str(row.get("SKU") or "").strip()
             title = str(row.get("Title") or "").strip()
             status = str(row.get("Status") or "").strip().upper()
@@ -248,6 +254,31 @@ def main():
                 extra_axes.append(sku)
             writer.writerow(build_row(row))
             exported += 1
+            exported_rownums.append(_idx + 2)
+
+    # Mark every exported row so the NEXT export contains only products
+    # that have never been in an upload file - the manual tick kept getting
+    # forgotten and nearly re-submitted a whole catalog. Recovery if an
+    # exported file is lost before uploading: every run keeps its exact CSV
+    # as a downloadable artifact (~90 days) - re-download instead of
+    # re-exporting.
+    if exported_rownums:
+        headers = [str(h).strip() for h in sheet.row_values(1)]
+        if "Exported to OnBuy" in headers:
+            col = headers.index("Exported to OnBuy") + 1
+            pairs = [(f"{col_letter(col)}{r}", "TRUE") for r in exported_rownums]
+
+            def _do_mark():
+                return sheet.batch_update([{"range": rg, "values": [[v]]} for rg, v in pairs])
+
+            try:
+                with_retry(_do_mark, what="mark exported rows", max_attempts=3)
+                print(f"Marked {len(exported_rownums)} row(s) 'Exported to OnBuy = TRUE'")
+            except Exception as exc:
+                print(f"WARNING: marking exported rows FAILED - mark them manually before the next "
+                      f"export or these products will appear in it again: {exc}")
+        else:
+            print("WARNING: no 'Exported to OnBuy' column in the sheet - rows not marked")
 
     print(f"Wrote {OUTPUT_FILE}: {exported} product(s)"
           + (f" + {parent_rows} variant parent row(s)" if parent_rows else ""))
