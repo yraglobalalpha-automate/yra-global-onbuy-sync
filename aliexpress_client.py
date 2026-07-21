@@ -59,7 +59,10 @@ def _classify_error(body):
         raise AuthError(text + " - re-run the AliExpress authorization step and update ALI_ACCESS_TOKEN")
     if "limit" in lowered or "flow" in lowered or code == "7":
         raise RateLimitError()
-    if code in ("15", "9"):  # remote service error / system busy
+    if code in ("15", "9") or "timeout" in lowered or "busy" in lowered:
+        # Remote service error / system busy / RPC timeout - retryable
+        # supplier-side blips, seen live as "ServiceTimeout: The request
+        # has failed due to RPC timeout" failing runs as permanent.
         raise TransientError(text)
     raise PermanentError(text)
 
@@ -207,6 +210,25 @@ def get_aliexpress_data(url, variant_choice="", variants_enabled=True):
         _PRODUCT_CACHE[product_id] = body
 
     response = body.get("aliexpress_ds_product_get_response") or {}
+
+    # The DS API sometimes answers with an rsp_code envelope instead of a
+    # result - seen live: rsp_code 604 "All SKU Unsaleable". That is a
+    # DEFINITIVE "nobody can buy this product (any more / in this country)"
+    # answer, the same business signal as "not selling" - NOT a client
+    # error. Treating it as one made such rows poison: they failed the run
+    # every 3 hours until removed.
+    rsp_code = str(response.get("rsp_code") or "")
+    if rsp_code and rsp_code != "200":
+        rsp_msg = str(response.get("rsp_msg") or "")
+        lowered = rsp_msg.lower()
+        if rsp_code == "604" or "unsaleable" in lowered or "not found" in lowered \
+                or "offline" in lowered or "deleted" in lowered or "removed" in lowered:
+            logger.info("ALIEXPRESS ITEM UNSALEABLE (rsp %s %s): %s", rsp_code, rsp_msg, product_id)
+            return False, empty_response()
+        if "timeout" in lowered or "busy" in lowered:
+            raise TransientError(f"aliexpress item {product_id}: rsp {rsp_code} {rsp_msg}")
+        raise PermanentError(f"aliexpress item {product_id}: rsp_code {rsp_code}: {rsp_msg}")
+
     result = response.get("result") or {}
     if not result:
         raise PermanentError(
