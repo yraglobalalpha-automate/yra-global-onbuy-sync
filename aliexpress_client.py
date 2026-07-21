@@ -235,6 +235,13 @@ def get_aliexpress_data(url, variant_choice="", variants_enabled=True):
 
     result = response.get("result") or {}
     if not result:
+        if response:
+            # Envelope with only request/trace ids - no result, no rsp_code,
+            # no error. Yet another dialect dead items answer in (seen live:
+            # one item among hundreds in a run). Treated as unavailable; the
+            # distinct log line makes it obvious if it ever turns systemic.
+            logger.info("ALIEXPRESS EMPTY RESPONSE - treating as unavailable: %s", product_id)
+            return False, empty_response()
         raise PermanentError(
             f"aliexpress item {product_id}: unexpected response shape: {str(body)[:300]}")
 
