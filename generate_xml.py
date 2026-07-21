@@ -1354,13 +1354,23 @@ def main():
 
         applied_ticked = str(row.get("Applied on OnBuy") or "").strip().upper() in ("TRUE", "YES", "1", "DONE")
         existing_alert = str(row.get("Change Alert") or "").strip()
+        # Fix-me FLAG alerts (bad link, bad SKU, duplicate, variant...) are
+        # cleared by FIXING THE ROW, not by ticking "Applied on OnBuy" - if
+        # this code is running, the row fetched successfully, so whatever the
+        # flag complained about is resolved: alert clears, colour returns to
+        # white on this same run. Real change alerts (OUT OF STOCK / BACK IN
+        # STOCK / PRICE) still wait for the tick, as designed - they need a
+        # human to act on OnBuy, not on the row.
+        _FLAG_PREFIXES = ("variant", "choose variant", "unreadable link", "add sku",
+                          "invalid sku", "duplicate", "aliexpress")
+        is_flag_alert = existing_alert.lower().startswith(_FLAG_PREFIXES)
         if change_notes:
             alert_for_row = "; ".join(change_notes)
             alert_time_for_row = now_str
             change_log.append((sku, alert_for_row))
-        elif applied_ticked and existing_alert:
-            # Employee confirmed the change was applied on OnBuy - clear the
-            # alert so the row goes back to normal until the next real change.
+        elif existing_alert and (applied_ticked or is_flag_alert):
+            # Cleared: either the employee confirmed the change was applied
+            # on OnBuy, or a fix-me flag just proved itself fixed.
             alert_for_row = ""
             alert_time_for_row = ""
         else:
