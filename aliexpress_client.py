@@ -220,9 +220,13 @@ def get_aliexpress_data(url, variant_choice="", variants_enabled=True):
     rsp_code = str(response.get("rsp_code") or "")
     if rsp_code and rsp_code != "200":
         rsp_msg = str(response.get("rsp_msg") or "")
-        lowered = rsp_msg.lower()
-        if rsp_code == "604" or "unsaleable" in lowered or "not found" in lowered \
-                or "offline" in lowered or "deleted" in lowered or "removed" in lowered:
+        # Messages arrive underscore-styled (ITEM_ID_NOT_FOUND) - normalize
+        # before matching. Observed live: 604 All SKU Unsaleable, 605
+        # ITEM_ID_NOT_FOUND (listing removed), 482 SHIP_TO_COUNTRY_PROHIBITED
+        # (cannot ship to this store's country).
+        lowered = rsp_msg.lower().replace("_", " ")
+        if rsp_code in ("604", "605", "482") or "unsaleable" in lowered or "not found" in lowered \
+                or "offline" in lowered or "delete" in lowered or "removed" in lowered or "prohibited" in lowered or "expired" in lowered:
             logger.info("ALIEXPRESS ITEM UNSALEABLE (rsp %s %s): %s", rsp_code, rsp_msg, product_id)
             return False, empty_response()
         if "timeout" in lowered or "busy" in lowered:
