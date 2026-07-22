@@ -870,6 +870,22 @@ def main():
     if skipped_incomplete:
         logger.info("Skipping %d row(s) with no usable Supplier URL yet (eBay/AliExpress) - not counted against this run's batch", skipped_incomplete)
 
+    # Manual runs pick ONLY unfilled rows (no Title yet) by default - the
+    # Run button exists to onboard newly added products fast, not to
+    # re-fetch the whole catalogue (user policy 2026-07-22; a routine
+    # manual trigger was spending 28 minutes re-fetching 1,300 filled
+    # rows). Scheduled runs keep the full oldest-first rotation. Setting
+    # refresh_all=yes on the dispatch form restores a deliberate full
+    # sweep (repricing days). Local runs behave like scheduled.
+    if os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch" \
+            and str(os.getenv("REFRESH_ALL") or "").strip().lower() not in ("yes", "true", "1"):
+        _unfilled = [(idx, row) for idx, row in processable
+                     if not str(row.get("Title") or "").strip()]
+        logger.info("Manual run: limited to %d unfilled row(s) of %d processable - filled rows "
+                    "refresh on scheduled runs; set refresh_all=yes for a full sweep",
+                    len(_unfilled), len(processable))
+        processable = _unfilled
+
     if FULL_REFRESH:
         sorted_data = processable
     else:
