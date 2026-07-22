@@ -2,7 +2,7 @@ name: YRA Sync
 
 on:
   schedule:
-    - cron: "15 */3 * * *"   # every 3 hours at :15 (own slot: GTV runs :00, Arden :30)
+    - cron: "19 */2 * * *"   # every 2h on an unpopular minute - GitHub drops busy-minute crons under load (observed 5-11h gaps); denser asks + odd minutes net a steadier real cadence, and the per-run batch (budget/RUNS_PER_DAY) keeps daily spend identical
   workflow_dispatch:
     inputs:
       max_products:
@@ -51,7 +51,7 @@ jobs:
           # Batch size scales automatically from these two - RUNS_PER_DAY
           # must match the cron above (every 3h = 8/day).
           EBAY_DAILY_CALL_BUDGET: ${{ vars.EBAY_DAILY_CALL_BUDGET }}
-          RUNS_PER_DAY: ${{ vars.RUNS_PER_DAY }}
+          RUNS_PER_DAY: ${{ vars.RUNS_PER_DAY || '12' }}
           MAX_PRODUCTS_PER_RUN: ${{ inputs.max_products || vars.MAX_PRODUCTS_PER_RUN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
