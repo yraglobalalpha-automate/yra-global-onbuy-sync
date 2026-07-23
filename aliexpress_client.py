@@ -307,7 +307,17 @@ def get_aliexpress_data(url, variant_choice="", variants_enabled=True):
         logger.info("NO PRICE: aliexpress %s", product_id)
         return False, empty_response()
     if stock <= 0:
-        logger.info("OUT OF STOCK: aliexpress %s", product_id)
+        # Diagnostic detail (kept deliberately): a page can show stock while
+        # the API - asked for ship-to-GB availability - reports zero, or the
+        # link can pin one sold-out version of a multi-version product. This
+        # line shows which it is, per product, straight from the response.
+        try:
+            _detail = [(s.get("sku_id"), s.get("sku_available_stock"), s.get("ipm_sku_stock"))
+                       for s in (skus[:8] if skus else [])]
+        except Exception:
+            _detail = "n/a"
+        logger.info("OUT OF STOCK: aliexpress %s (chosen sku %s; per-version stock %s)",
+                    product_id, sku.get("sku_id"), _detail)
         return False, empty_response()
 
     multimedia = result.get("ae_multimedia_info_dto") or {}
