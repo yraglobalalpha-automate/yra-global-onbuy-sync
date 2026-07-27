@@ -150,6 +150,14 @@ def is_valid_gtin(code):
     that were numeric and 12 digits long but not real barcodes."""
     if not code.isdigit() or len(code) not in (8, 12, 13, 14):
         return False
+    # GS1 reserves the "5" number system of 12-digit UPCs for discount
+    # coupons - such codes pass the check digit but can never be product
+    # codes, and OnBuy's GS1 registry check rejects them ("not a valid
+    # product code": 23 YRA + 74 Arden feed rows, 2026-07-28). A 13-digit
+    # code starting "05" is the same coupon number zero-padded; 13-digit
+    # codes starting "50" (GS1 UK) remain perfectly valid.
+    if (len(code) == 12 and code[0] == "5") or (len(code) == 13 and code.startswith("05")):
+        return False
     body, check_digit = code[:-1], code[-1]
     total = sum(int(d) * (3 if i % 2 == 0 else 1) for i, d in enumerate(reversed(body)))
     return str((10 - total % 10) % 10) == check_digit
@@ -1160,7 +1168,10 @@ def main():
             highlight_requests.append(row_highlight_request(sheet.id, i, num_cols, active=True, pending_change=True))
             logger.warning("Row %d: no SKU provided - flagged MISSING SKU (OnBuy requires a unique SKU per product)", i)
             continue
-        if not is_valid_gtin(sku_numeric_part(sku)):
+        _sku_digits = sku_numeric_part(sku)
+        _coupon_range = ((len(_sku_digits) == 12 and _sku_digits[:1] == "5")
+                         or (len(_sku_digits) == 13 and _sku_digits.startswith("05")))
+        if not is_valid_gtin(_sku_digits):
             # A number that fails the GS1 check digit would be rejected by
             # OnBuy at upload - surface it within one sync cycle instead of
             # at export day. Commonest cause in practice is not invention:
@@ -1174,11 +1185,16 @@ def main():
             if "Supplier" in col_map:
                 inv_updates.append({"range": f"{col_letter(col_map['Supplier'])}{i}", "values": [[supplier]]})
             if "Change Alert" in col_map:
+                inv_alert = (f"INVALID SKU - '{sku}' starts with 5, and 12-digit numbers starting "
+                             "with 5 are reserved for discount coupons, never products - OnBuy rejects "
+                             "them as invalid product codes. Change the SKU to a number that does not "
+                             "start with 5") if _coupon_range else (
+                             f"INVALID SKU - '{sku}' is not a real barcode (must be 8, 12, 13 or 14 "
+                             "digits ending in a correct check digit). If the number looks right, "
+                             "leading zeros were probably stripped - format the SKU column as "
+                             "Plain text and re-type it with its zeros")
                 inv_updates.append({"range": f"{col_letter(col_map['Change Alert'])}{i}",
-                                    "values": [[f"INVALID SKU - '{sku}' is not a real barcode (must be 8, 12, 13 or 14 "
-                                                "digits ending in a correct check digit). If the number looks right, "
-                                                "leading zeros were probably stripped - format the SKU column as "
-                                                "Plain text and re-type it with its zeros"]]})
+                                    "values": [[inv_alert]]})
             if "Change Time" in col_map:
                 inv_updates.append({"range": f"{col_letter(col_map['Change Time'])}{i}", "values": [[now_str]]})
             all_sheet_updates.extend(inv_updates)
