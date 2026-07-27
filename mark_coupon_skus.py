@@ -28,7 +28,9 @@ def main():
     book = gspread.authorize(creds).open(SHEET_NAME)
     sheet = book.sheet1
     data = sheet.get_all_records()
-    headers = sheet.row_values(1)
+    # Headers may carry stray whitespace - the pipeline strips them the
+    # same way (generate_xml col_map does str(h).strip()).
+    headers = [str(h).strip() for h in sheet.row_values(1)]
     sku_col = headers.index("SKU")
 
     requests, matched = [], []
