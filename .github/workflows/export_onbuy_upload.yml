@@ -1,0 +1,35 @@
+name: Export OnBuy Upload
+
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build the upload CSV from the Sheet
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_NAME: ${{ vars.SHEET_NAME }}
+        run: python export_onbuy_upload.py
+
+      - name: Upload the CSV as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yra-onbuy-upload
+          path: YRA_OnBuy_Upload.csv
+          if-no-files-found: warn

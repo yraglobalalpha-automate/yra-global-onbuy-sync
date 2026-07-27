@@ -1,0 +1,80 @@
+name: YRA Sync
+
+on:
+  schedule:
+    - cron: "19 */2 * * *"   # every 2h on an unpopular minute - GitHub drops busy-minute crons under load (observed 5-11h gaps); denser asks + odd minutes net a steadier real cadence, and the per-run batch (budget/RUNS_PER_DAY) keeps daily spend identical
+  workflow_dispatch:
+    inputs:
+      max_products:
+        description: "One-off batch size override - e.g. 1300 to sweep the whole sheet in this single run (scheduled runs keep the normal batch)"
+        required: false
+        default: ""
+      refresh_all:
+        description: "Set to yes to ALSO re-fetch already-filled rows (full sweep). Default: manual runs only fill NEW rows"
+        required: false
+        default: ""
+
+# A manual run and a scheduled run must never fetch at the same time - they
+# would double-spend the eBay daily call budget and interleave Sheet writes.
+concurrency:
+  group: yra-sync
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run sync
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          # AliExpress Dropshipping API (second supplier). ALI_ACCESS_TOKEN
+          # comes from the one-time authorization step - see
+          # get_aliexpress_token.py for the walkthrough.
+          ALI_APP_KEY: ${{ secrets.ALI_APP_KEY }}
+          ALI_APP_SECRET: ${{ secrets.ALI_APP_SECRET }}
+          ALI_ACCESS_TOKEN: ${{ secrets.ALI_ACCESS_TOKEN }}
+          # TVC Mall (third supplier) - email+password preferred (self-refreshing
+          # login per run); TVC_TOKEN is a static-token fallback.
+          TVC_EMAIL: ${{ secrets.TVC_EMAIL }}
+          TVC_PASSWORD: ${{ secrets.TVC_PASSWORD }}
+          TVC_TOKEN: ${{ secrets.TVC_TOKEN }}
+          TVC_BASE_URL: ${{ vars.TVC_BASE_URL }}
+          TVC_USD_TO_GBP: ${{ vars.TVC_USD_TO_GBP }}
+          # Defaults to "YRA_Feed_Master" if unset - set this Variable if
+          # the Google Sheet is named something else.
+          SHEET_NAME: ${{ vars.SHEET_NAME }}
+          # Batch size scales automatically from these two - RUNS_PER_DAY
+          # must match the cron above (every 3h = 8/day).
+          EBAY_DAILY_CALL_BUDGET: ${{ vars.EBAY_DAILY_CALL_BUDGET }}
+          RUNS_PER_DAY: ${{ vars.RUNS_PER_DAY || '12' }}
+          MAX_PRODUCTS_PER_RUN: ${{ inputs.max_products || vars.MAX_PRODUCTS_PER_RUN }}
+          REFRESH_ALL: ${{ inputs.refresh_all }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_FEED_BUCKET: ${{ vars.SUPABASE_FEED_BUCKET }}
+          # Email alerts - works with Resend (SMTP_HOST=smtp.resend.com,
+          # SMTP_USER=resend, SMTP_APP_PASSWORD=<API key>, ALERT_EMAIL_FROM=
+          # <verified sender>) or Gmail (just SMTP_USER + app password).
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          ALERT_EMAIL_FROM: ${{ vars.ALERT_EMAIL_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+        run: python generate_xml.py

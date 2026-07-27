@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+_old_prototype_backup/
+
+feed.xml
+onbuy_export.csv
+*.pdf
+YRA_OnBuy_Upload.csv
+
+# Operational docs stay on the office PC only - never in the public repo
+README.md
+CLAUDE.md
+*.pdf
+*.docx
