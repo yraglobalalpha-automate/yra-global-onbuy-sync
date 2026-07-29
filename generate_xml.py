@@ -900,7 +900,30 @@ def main():
     if FULL_REFRESH:
         sorted_data = processable
     else:
-        sorted_data = sorted(processable, key=lambda x: parse_time(x[1].get("Last Checked Time", "")))
+        # ================= PRIORITY REFRESH (2026-07-28) =================
+        # eBay refused a higher call limit, so the daily budget goes where
+        # the money is: rows already exported to OnBuy are LIVE listings -
+        # a stale out-of-stock there means overselling - so they take up to
+        # 80% of each batch, oldest first. Everything else (not exported,
+        # nothing live to oversell) shares the remaining slots, also oldest
+        # first. The 20% floor keeps new/unexported rows from ever being
+        # starved by a growing live catalogue - the 2026-07-06 starvation
+        # lesson applied in reverse. Net effect: live listings refresh
+        # daily even when the sheet far outgrows the call budget.
+        _EXPORTED_TRUTHY = {"TRUE", "YES", "1", "DONE", "X"}
+        _by_age = sorted(processable, key=lambda x: parse_time(x[1].get("Last Checked Time", "")))
+        _live_idx = {x[0] for x in _by_age
+                     if str(x[1].get("Exported to OnBuy") or "").strip().upper() in _EXPORTED_TRUTHY}
+        _live = [x for x in _by_age if x[0] in _live_idx]
+        _rest = [x for x in _by_age if x[0] not in _live_idx]
+        _live_cap = max(1, int(MAX_PRODUCTS_PER_RUN * 0.8)) if _rest else MAX_PRODUCTS_PER_RUN
+        _batch_live = _live[:_live_cap]
+        _batch_rest = _rest[:max(0, MAX_PRODUCTS_PER_RUN - len(_batch_live))]
+        sorted_data = _batch_live + _batch_rest
+        if _live or _rest:
+            logger.info("Priority refresh: %d live (exported) rows first (%d in batch), "
+                        "%d unexported rows fill the remaining %d slot(s)",
+                        len(_live), len(_batch_live), len(_rest), len(_batch_rest))
 
     # While testing the OnBuy API push against a specific SKU allowlist, move
     # those SKUs to the front of the queue - otherwise a manual test run can
