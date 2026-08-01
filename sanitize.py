@@ -48,6 +48,7 @@ _TEMPLATE_JUNK_PATTERNS = [
     r"Created with Eselt[\w ,'&-]*",
     r"Mobile Templates? for eBay Sellers?",
     r"Send us a message",
+    r"Our Store",
     r"Seller Profile",
     r"Check Our Feedback",
     r"Items for sale\b",
@@ -123,6 +124,11 @@ def sanitize_description(html, limit=45000):
     # since they're plain text, not markup.
     cleaned = _NOISE_RE.sub("", cleaned)
     cleaned = _TEMPLATE_JUNK_RE.sub("", cleaned)
+    # Menu leftovers: one-word navigation bullets and the tags emptied by
+    # the junk removal (run twice so lists emptied of items collapse too).
+    cleaned = re.sub(r"(?i)<li>\s*(?:Feedback|Returns|Contact(?: Us)?|Our Store|Menu|Home|Shop)\s*</li>", "", cleaned)
+    for _ in range(2):
+        cleaned = re.sub(r"<(li|p|ul|ol|b|strong|i|em)>\s*</>", "", cleaned)
     cleaned = _EMOJI_RE.sub("", cleaned)
 
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
