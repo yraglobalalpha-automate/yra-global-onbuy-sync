@@ -145,8 +145,10 @@ def sanitize_description(html, limit=45000):
     # Remove seller-boilerplate sentences the tag-level cleaning can't catch
     # since they're plain text, not markup.
     cleaned = _NOISE_RE.sub("", cleaned)
-    cleaned = _TEMPLATE_JUNK_RE.sub("", cleaned)
+    # Topic rule FIRST so whole seller sentences die intact; the phrase
+    # blocklist then only mops up non-sentence banner fragments.
     cleaned = _SELLER_TOPIC_RE.sub("", cleaned)
+    cleaned = _TEMPLATE_JUNK_RE.sub("", cleaned)
     # Menu leftovers: one-word navigation bullets and the tags emptied by
     # the junk removal (run twice so lists emptied of items collapse too).
     cleaned = re.sub(r"(?i)<li>\s*(?:Feedback|Returns|Contact(?: Us)?|Our Store|Menu|Home|Shop)\s*</li>", "", cleaned)
