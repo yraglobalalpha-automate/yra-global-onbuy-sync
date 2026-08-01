@@ -153,7 +153,7 @@ def sanitize_description(html, limit=45000):
     # the junk removal (run twice so lists emptied of items collapse too).
     cleaned = re.sub(r"(?i)<li>\s*(?:Feedback|Returns|Contact(?: Us)?|Our Store|Menu|Home|Shop)\s*</li>", "", cleaned)
     for _ in range(2):
-        cleaned = re.sub(r"<(li|p|ul|ol|b|strong|i|em)>\s*</\1>", "", cleaned)
+        cleaned = re.sub(r"<(li|p|ul|ol|b|strong|i|em)>[\s.,;:!?-]*</\1>", "", cleaned)
     cleaned = _EMOJI_RE.sub("", cleaned)
 
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
