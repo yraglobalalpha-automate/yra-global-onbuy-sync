@@ -39,6 +39,43 @@ _NOISE_PATTERNS = [
 # rejects a repeated inline flag inside each alternative of a joined pattern.
 _NOISE_RE = re.compile("(?i)" + "|".join(_NOISE_PATTERNS))
 
+# ---- eBay seller-template furniture (Eselt etc.), 2026-08-01 ----
+# These render as page decoration on eBay but arrive as TEXT in the
+# listing data, so they leaked into OnBuy descriptions at scale. The
+# final catch-all enforces the standing rule: no sentence mentioning
+# eBay may survive into a description we publish elsewhere.
+_TEMPLATE_JUNK_PATTERNS = [
+    r"Created with Eselt[\w ,'&-]*",
+    r"Mobile Templates? for eBay Sellers?",
+    r"Send us a message",
+    r"Seller Profile",
+    r"Check Our Feedback",
+    r"Items for sale\b",
+    r"About [Uu]s\b",
+    r"Why Shop With Us",
+    r"Add (?:us )?to Favou?rites?",
+    r"Payment\s+Shipping\b",
+    r"FREE Next working day shipping",
+    r"Immediate Payment is required[^.!?]*[.!?]?",
+    r"Many Payment Methods are accepted[^.!?]*[.!?]?",
+    r"We allow 30 calendar days[^.!?]*[.!?]?",
+    r"The customer is responsible for returning[^.!?]*[.!?]?",
+    r"No P\.?O\.? Box Delivery",
+    r"No APO/?FPO Delivery",
+    r"Royal Mail Confirmed Addresses Only",
+    r"Items? [Ww]ill be [Ss]hipped [Ss]ame or [Nn]ext [Bb]usiness day[^.!?]*[.!?]?",
+    r"Shipping via Royal Mail[^.!?]*[.!?]?",
+    r"RETURNS are Accepted for this Listing[^.!?]*[.!?]?",
+    r"ONLY Returnable if[^.!?]*[.!?]?",
+    r"This Item is Brand New",
+    r"Actual Images of item are shown above",
+    r"COPYRIGHT (?:\u00a9|\(c\))?[^.!?]*RESERVED[.!?]?",
+    # catch-all LAST: any remaining sentence-ish chunk mentioning eBay
+    r"[^.!?\n<>]*\beBay\b[^.!?\n<>]*[.!?]?",
+]
+_TEMPLATE_JUNK_RE = re.compile("(?i)" + "|".join(_TEMPLATE_JUNK_PATTERNS))
+
+
 # bleach's strip=True unwraps disallowed tags but keeps their *text* content -
 # fine for a stray <div>/<span>, but for <script>/<style> that would leak raw
 # JS/CSS straight into the "sanitized" description. Delete these tags and
@@ -85,6 +122,7 @@ def sanitize_description(html, limit=45000):
     # Remove seller-boilerplate sentences the tag-level cleaning can't catch
     # since they're plain text, not markup.
     cleaned = _NOISE_RE.sub("", cleaned)
+    cleaned = _TEMPLATE_JUNK_RE.sub("", cleaned)
     cleaned = _EMOJI_RE.sub("", cleaned)
 
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
