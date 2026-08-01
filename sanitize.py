@@ -76,6 +76,28 @@ _TEMPLATE_JUNK_PATTERNS = [
 ]
 _TEMPLATE_JUNK_RE = re.compile("(?i)" + "|".join(_TEMPLATE_JUNK_PATTERNS))
 
+# ---- spec-only policy (user rule 2026-08-01): descriptions may contain ----
+# product specification and nothing else. Any sentence touching a seller
+# topic (refunds/returns, delivery/shipping, payment, contact, feedback,
+# store talk, templates, auctions) is deleted whole. Carve-outs keep real
+# specs alive: "haptic/force/tactile feedback", "delivers <spec>" (only
+# the nouns delivery/deliveries are seller-talk, the verb is not).
+_SELLER_TOPICS = (
+    r"refunds?|returns?|exchanges? accepted|delivery|deliveries|dispatch\w*|"
+    r"shipping|shipped|courier\w*|postage|royal mail|parcel\s*force|evri|hermes|dpd|dhl|fedex|"
+    r"tracking number|tracked|next working day|working days?|business days?|"
+    r"payments?|paypal|checkout|invoice|"
+    r"contact us|please contact|contact our|message us|email us|"
+    r"customer (?:service|support|care)|(?<!haptic )(?<!force )(?<!tactile )feedback|"
+    r"satisfaction|review us|our (?:store|shop)|visit (?:us|our)|subscribe|newsletter|"
+    r"special offers?|great offers?|best price|price match|templates?|"
+    r"your order|order (?:will|is|has|before)|auctions?|bidding|sellers?|buyers?|"
+    r"vouchers?|coupons?|money.?back guarantee|satisfaction guaranteed?"
+)
+_SELLER_TOPIC_RE = re.compile(
+    r"(?i)[^.!?\n<>]*\b(?:" + _SELLER_TOPICS + r")\b[^.!?\n<>]*[.!?]?")
+
+
 
 # bleach's strip=True unwraps disallowed tags but keeps their *text* content -
 # fine for a stray <div>/<span>, but for <script>/<style> that would leak raw
@@ -124,6 +146,7 @@ def sanitize_description(html, limit=45000):
     # since they're plain text, not markup.
     cleaned = _NOISE_RE.sub("", cleaned)
     cleaned = _TEMPLATE_JUNK_RE.sub("", cleaned)
+    cleaned = _SELLER_TOPIC_RE.sub("", cleaned)
     # Menu leftovers: one-word navigation bullets and the tags emptied by
     # the junk removal (run twice so lists emptied of items collapse too).
     cleaned = re.sub(r"(?i)<li>\s*(?:Feedback|Returns|Contact(?: Us)?|Our Store|Menu|Home|Shop)\s*</li>", "", cleaned)
