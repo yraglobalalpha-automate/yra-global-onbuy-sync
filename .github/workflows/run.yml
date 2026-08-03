@@ -5,6 +5,9 @@ on:
     - cron: "19 */2 * * *"   # every 2h on an unpopular minute - GitHub drops busy-minute crons under load (observed 5-11h gaps); denser asks + odd minutes net a steadier real cadence, and the per-run batch (budget/RUNS_PER_DAY) keeps daily spend identical
   workflow_dispatch:
     inputs:
+      recategorize:
+        description: "Let eBay's Type overwrite existing categories (yes/no)"
+        default: "no"
       max_products:
         description: "One-off batch size override - e.g. 1300 to sweep the whole sheet in this single run (scheduled runs keep the normal batch)"
         required: false
@@ -42,6 +45,7 @@ jobs:
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          RECATEGORIZE_FROM_TYPE: ${{ inputs.recategorize == 'yes' && '1' || '' }}
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
           # AliExpress Dropshipping API (second supplier). ALI_ACCESS_TOKEN
           # comes from the one-time authorization step - see

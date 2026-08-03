@@ -104,6 +104,15 @@ FETCH_FAILURE_ALERT_THRESHOLD = 3
 PK_TZ = ZoneInfo("Asia/Karachi")
 
 
+
+# One-off maintenance switch (workflow input "recategorize"): normally an
+# existing VALID category is never overwritten - that protects the manual
+# choices employees make. With this on, a confident eBay-Type match may
+# replace a valid-but-wrong category (the smart watch filed under Car GPS
+# Trackers, 2026-08-03). Only Type may overwrite; the title scorer never
+# does, and rows whose Type is unclear keep exactly what they have.
+RECATEGORIZE_FROM_TYPE = (os.getenv("RECATEGORIZE_FROM_TYPE") or "").strip().lower() in ("1", "yes", "true")
+
 def should_push_to_onbuy(sku):
     if not ONBUY_API_PUSH_ENABLED:
         return False
@@ -806,7 +815,9 @@ def main():
         category_guard[_path] = next(
             (req for prefix, req in _GUARDED_SUBTREES if _low.startswith(prefix)), None)
 
-    def map_onbuy_category(title, current_category, description="", product_type=""):
+    def type_category(product_type, title="", description=""):
+        """The category eBay's Type field alone justifies, or None.
+        Extracted so maintenance runs can ask it directly."""
         # eBay's structured Type is AUTHORITATIVE and runs FIRST (user
         # 2026-08-03: a smart watch landed in Car GPS Trackers because its
         # title carries "GPS" and "tracker" as feature words - scoring a
@@ -851,6 +862,12 @@ def main():
                     logger.info("Category matched via eBay Type %r -> %s",
                                 product_type, candidates[0][3])
                     return candidates[0][3]
+        return None
+
+    def map_onbuy_category(title, current_category, description="", product_type=""):
+        by_type = type_category(product_type, title, description)
+        if by_type:
+            return by_type
         title_words = category_match_tokens(f"{title}\n{current_category}")
         desc_words = category_match_tokens(description) - title_words
         all_words = title_words | desc_words
@@ -1426,6 +1443,14 @@ def main():
         if is_valid_onbuy_category(current_category):
             category = current_category
             category_needs_write = False
+            if RECATEGORIZE_FROM_TYPE:
+                _by_type = type_category(
+                    (ebay_data.get("product_type") or "") if isinstance(ebay_data, dict) else "",
+                    title, description)
+                if _by_type and _by_type != current_category:
+                    logger.info("Recategorized by eBay Type: %r -> %r", current_category, _by_type)
+                    category = _by_type
+                    category_needs_write = True
         else:
             category = map_onbuy_category(title, current_category, description,
                                           (ebay_data.get("product_type") or "") if isinstance(ebay_data, dict) else "")
