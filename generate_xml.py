@@ -277,9 +277,18 @@ _GUARDED_SUBTREES = (
 
 
 def _stem(word):
-    # Bridge singular/plural ("adapter" <-> "Adapters", "sling" <-> "Slings")
-    # without a real stemmer - enough for category-path matching.
-    return word[:-1] if len(word) > 3 and word.endswith("s") else word
+    # Bridge singular/plural ("adapter" <-> "Adapters", "watch" <-> "Watches")
+    # without a real stemmer. The -es forms matter: the naive "drop one s"
+    # rule turned "Watches" into "watche", so a Type of "Smart Watch" could
+    # never match the "Smart Watches" leaf and landed in "Smart Watch Cases"
+    # instead (2026-08-03). Order matters - most specific ending first.
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"            # batteries -> battery
+    if len(word) > 4 and word.endswith(("ches", "shes", "sses", "xes", "zes")):
+        return word[:-2]                  # watches -> watch, boxes -> box
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]                  # adapters -> adapter
+    return word
 
 
 def category_match_tokens(text):
@@ -798,6 +807,50 @@ def main():
             (req for prefix, req in _GUARDED_SUBTREES if _low.startswith(prefix)), None)
 
     def map_onbuy_category(title, current_category, description="", product_type=""):
+        # eBay's structured Type is AUTHORITATIVE and runs FIRST (user
+        # 2026-08-03: a smart watch landed in Car GPS Trackers because its
+        # title carries "GPS" and "tracker" as feature words - scoring a
+        # marketing title can never beat a field that names the product).
+        # Still strict: leaf names only, unique best required; anything
+        # ambiguous falls through to the title scorer exactly as before.
+        # Leaf-name-only matching, subset in either direction (tokens are
+        # plural-normalized), and only a UNIQUE best is accepted: precision
+        # over recall, the DisplayPort rule. Ties or no candidates fall
+        # through to the human worklist exactly as before.
+        type_tokens = category_match_tokens(product_type)
+        if type_tokens:
+            # Words a leaf adds beyond the Type must be corroborated by the
+            # product's own words: a Type of "GPS Tracker" must not become
+            # "Car GPS Trackers" unless the listing actually says "car"
+            # (2026-08-03). "Phone Case" -> "Mobile Phone Cases" still
+            # works because such listings do say "mobile".
+            corroborating = category_match_tokens(f"{title}\n{description}")
+            candidates = []
+            for category_path in onbuy_categories:
+                leaf = category_leaf_tokens[category_path]
+                if not leaf:
+                    continue
+                # A 1-word Type may only take a leaf whose visible name it
+                # covers completely - "Light" must NOT take "DJ Lights"
+                # (the 2-letter DJ vanishes in tokenization). Multi-word
+                # Types may also sub-match inside a bigger leaf.
+                leaf_word_count = len(tokenize(category_path.split(">")[-1]))
+                covers_whole_leaf = leaf <= type_tokens and leaf_word_count == len(leaf)
+                strong_submatch = len(type_tokens) >= 2 and (leaf <= type_tokens or type_tokens <= leaf)
+                if covers_whole_leaf or strong_submatch:
+                    extras = leaf - type_tokens
+                    if extras and not extras <= corroborating:
+                        continue
+                    overlap = len(leaf & type_tokens)
+                    if overlap:
+                        candidates.append((overlap, -len(leaf - type_tokens),
+                                           -len(category_path), category_path))
+            if candidates:
+                candidates.sort(reverse=True)
+                if len(candidates) == 1 or candidates[0][:2] > candidates[1][:2]:
+                    logger.info("Category matched via eBay Type %r -> %s",
+                                product_type, candidates[0][3])
+                    return candidates[0][3]
         title_words = category_match_tokens(f"{title}\n{current_category}")
         desc_words = category_match_tokens(description) - title_words
         all_words = title_words | desc_words
@@ -832,36 +885,6 @@ def main():
         if best_match and best_score >= 9 and best_has_title_hit:
             return best_match
 
-        # Title gave no confident answer - try eBay's structured Type.
-        # Leaf-name-only matching, subset in either direction (tokens are
-        # plural-normalized), and only a UNIQUE best is accepted: precision
-        # over recall, the DisplayPort rule. Ties or no candidates fall
-        # through to the human worklist exactly as before.
-        type_tokens = category_match_tokens(product_type)
-        if type_tokens:
-            candidates = []
-            for category_path in onbuy_categories:
-                leaf = category_leaf_tokens[category_path]
-                if not leaf:
-                    continue
-                # A 1-word Type may only take a leaf whose visible name it
-                # covers completely - "Light" must NOT take "DJ Lights"
-                # (the 2-letter DJ vanishes in tokenization). Multi-word
-                # Types may also sub-match inside a bigger leaf.
-                leaf_word_count = len(tokenize(category_path.split(">")[-1]))
-                covers_whole_leaf = leaf <= type_tokens and leaf_word_count == len(leaf)
-                strong_submatch = len(type_tokens) >= 2 and (leaf <= type_tokens or type_tokens <= leaf)
-                if covers_whole_leaf or strong_submatch:
-                    overlap = len(leaf & type_tokens)
-                    if overlap:
-                        candidates.append((overlap, -len(leaf - type_tokens),
-                                           -len(category_path), category_path))
-            if candidates:
-                candidates.sort(reverse=True)
-                if len(candidates) == 1 or candidates[0][:2] > candidates[1][:2]:
-                    logger.info("Category matched via eBay Type %r -> %s",
-                                product_type, candidates[0][3])
-                    return candidates[0][3]
         return current_category
 
     # ================= ONBUY CLIENT =================
