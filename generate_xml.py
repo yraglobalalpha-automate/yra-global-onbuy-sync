@@ -844,7 +844,14 @@ def main():
                 leaf = category_leaf_tokens[category_path]
                 if not leaf:
                     continue
-                if leaf <= type_tokens or type_tokens <= leaf:
+                # A 1-word Type may only take a leaf whose visible name it
+                # covers completely - "Light" must NOT take "DJ Lights"
+                # (the 2-letter DJ vanishes in tokenization). Multi-word
+                # Types may also sub-match inside a bigger leaf.
+                leaf_word_count = len(tokenize(category_path.split(">")[-1]))
+                covers_whole_leaf = leaf <= type_tokens and leaf_word_count == len(leaf)
+                strong_submatch = len(type_tokens) >= 2 and (leaf <= type_tokens or type_tokens <= leaf)
+                if covers_whole_leaf or strong_submatch:
                     overlap = len(leaf & type_tokens)
                     if overlap:
                         candidates.append((overlap, -len(leaf - type_tokens),
