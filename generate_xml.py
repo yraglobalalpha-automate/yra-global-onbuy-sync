@@ -660,6 +660,24 @@ def get_ebay_data(url, token, variant_choice=""):
     product_code = extract_product_code(data)
     condition = data.get("condition") or "New"
 
+    # eBay's structured "Type" item specific names the product class
+    # outright ("Air Fryer", "Foot File") even when a marketing title
+    # doesn't (user insight 2026-08-01: novelty-gift titles hide the
+    # product, but Type identifies it). Fallback: sellers often render
+    # the specifics into the description text as "Type: ...".
+    product_type = ""
+    for aspect in data.get("localizedAspects", []):
+        if aspect.get("name", "").strip().lower() in ("type", "product type", "item type"):
+            values = aspect.get("value", "")
+            product_type = str(values[0] if isinstance(values, list) else values).strip()
+            if product_type:
+                break
+    if not product_type:
+        m = re.search(r"(?i)\btype\s*:\s*(?:</?[a-z][^>]*>\s*)*([A-Za-z][A-Za-z &/-]{2,40})",
+                      str(data.get("description") or ""))
+        if m:
+            product_type = m.group(1).strip()
+
     return True, {
         "stock": stock,
         "price": price,
@@ -670,6 +688,7 @@ def get_ebay_data(url, token, variant_choice=""):
         "brand": brand,
         "product_code": product_code,
         "condition": condition,
+        "product_type": product_type,
         "variant_group": variant_group,
         "variant_detail": variant_detail,
     }
@@ -778,7 +797,7 @@ def main():
         category_guard[_path] = next(
             (req for prefix, req in _GUARDED_SUBTREES if _low.startswith(prefix)), None)
 
-    def map_onbuy_category(title, current_category, description=""):
+    def map_onbuy_category(title, current_category, description="", product_type=""):
         title_words = category_match_tokens(f"{title}\n{current_category}")
         desc_words = category_match_tokens(description) - title_words
         all_words = title_words | desc_words
@@ -812,6 +831,30 @@ def main():
         # the OnBuy export until a human sets one.
         if best_match and best_score >= 9 and best_has_title_hit:
             return best_match
+
+        # Title gave no confident answer - try eBay's structured Type.
+        # Leaf-name-only matching, subset in either direction (tokens are
+        # plural-normalized), and only a UNIQUE best is accepted: precision
+        # over recall, the DisplayPort rule. Ties or no candidates fall
+        # through to the human worklist exactly as before.
+        type_tokens = category_match_tokens(product_type)
+        if type_tokens:
+            candidates = []
+            for category_path in onbuy_categories:
+                leaf = category_leaf_tokens[category_path]
+                if not leaf:
+                    continue
+                if leaf <= type_tokens or type_tokens <= leaf:
+                    overlap = len(leaf & type_tokens)
+                    if overlap:
+                        candidates.append((overlap, -len(leaf - type_tokens),
+                                           -len(category_path), category_path))
+            if candidates:
+                candidates.sort(reverse=True)
+                if len(candidates) == 1 or candidates[0][:2] > candidates[1][:2]:
+                    logger.info("Category matched via eBay Type %r -> %s",
+                                product_type, candidates[0][3])
+                    return candidates[0][3]
         return current_category
 
     # ================= ONBUY CLIENT =================
@@ -1354,7 +1397,8 @@ def main():
             category = current_category
             category_needs_write = False
         else:
-            category = map_onbuy_category(title, current_category, description)
+            category = map_onbuy_category(title, current_category, description,
+                                          (ebay_data.get("product_type") or "") if isinstance(ebay_data, dict) else "")
             category_needs_write = category != current_category
         category_id = category_id_by_path.get(category.strip().lower())
 
