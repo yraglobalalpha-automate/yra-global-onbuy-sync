@@ -150,6 +150,27 @@ def parse_time(value):
         return datetime(2000, 1, 1)
 
 
+def carry_forward(fresh, stored, default=None):
+    """First non-None value wins - this run's value, else what Supabase
+    already had, else `default`.
+
+    `or` cannot be used for the OnBuy-tracking columns. Under the canonical
+    typed schema (2026-08-06: boolean / boolean / nullable timestamp, as on
+    the GTV store) PostgREST returns a stored boolean False as Python False
+    - falsy but perfectly valid - so `or` falls straight past it to the
+    default and sends "" into a boolean column, which 400s the ENTIRE
+    batch (22P02) and loses the database mirror for every row in it
+    (GTV, ~25% of runs, fixed 2026-08-04). Safe against the pre-migration
+    text schema too: "FALSE" is a normal string there and NULL is accepted
+    (canary-verified per store before this port).
+    """
+    if fresh is not None:
+        return fresh
+    if stored is not None:
+        return stored
+    return default
+
+
 def is_valid_gtin(code):
     """True if `code` is a real barcode by the GS1 check-digit standard used
     for UPC-A/EAN-8/EAN-13/GTIN-14 (all the same algorithm, just different
@@ -1836,10 +1857,15 @@ def main():
             # these have to live on the same row as the fields above rather
             # than a separate partial-column upsert.
             "Sync Status": sync_status or existing.get("Sync Status") or "",
-            "OnBuy Product Created": onbuy_product_created or existing.get("OnBuy Product Created") or "",
-            "OnBuy Listing Active": onbuy_listing_active or existing.get("OnBuy Listing Active") or "",
+            # These three are boolean/boolean/timestamp under the canonical
+            # schema, so "" is not a legal value for any of them - see
+            # carry_forward(). "FALSE" is the truthful default for a row
+            # never pushed (not created, not live); NULL for a sync that
+            # never happened.
+            "OnBuy Product Created": carry_forward(onbuy_product_created, existing.get("OnBuy Product Created"), "FALSE"),
+            "OnBuy Listing Active": carry_forward(onbuy_listing_active, existing.get("OnBuy Listing Active"), "FALSE"),
             "OnBuy Product ID": onbuy_product_id or existing.get("OnBuy Product ID") or "",
-            "Last OnBuy Sync": last_onbuy_sync or existing.get("Last OnBuy Sync") or "",
+            "Last OnBuy Sync": carry_forward(last_onbuy_sync, existing.get("Last OnBuy Sync")),
             # YRA change-alert state, mirrored so Supabase holds the same
             # picture employees see in the Sheet.
             "Change Alert": alert_for_row,
