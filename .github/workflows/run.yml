@@ -69,6 +69,7 @@ jobs:
           # (yra-full-automate, live 2026-07-31) - keep the two in step.
           EBAY_DAILY_CALL_BUDGET: ${{ vars.EBAY_DAILY_CALL_BUDGET || '2000' }}
           RUNS_PER_DAY: ${{ vars.RUNS_PER_DAY || '12' }}
+          EXCLUDED_SUPPLIERS: ${{ vars.EXCLUDED_SUPPLIERS }}
           MAX_PRODUCTS_PER_RUN: ${{ inputs.max_products || vars.MAX_PRODUCTS_PER_RUN }}
           REFRESH_ALL: ${{ inputs.refresh_all }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
