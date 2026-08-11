@@ -986,11 +986,21 @@ def main():
         logger.info("Remove ticked on %d row(s) - they will be deleted at the end of this run (SKUs: %s)",
                     len(removal_rows), ", ".join(removal_skus) or "none")
 
+    # EXCLUDED_SUPPLIERS (comma-separated, e.g. "eBay"): rows of these
+    # suppliers are left out of the batch entirely - set on a store whose
+    # eBay-linked rows migrated to a Full-auto system (Arden, 2026-08-11),
+    # so this semi system spends its batch only on the suppliers it still
+    # owns and never double-fetches against the Full system's eBay quota.
+    excluded_suppliers = {s.strip().lower() for s in
+                          (os.getenv("EXCLUDED_SUPPLIERS") or "").split(",") if s.strip()}
+
     processable = [(idx, row) for idx, row in enumerate(data)
-                   if (idx + 2) not in removal_rows and detect_supplier(row.get("Supplier URL", ""))]
+                   if (idx + 2) not in removal_rows
+                   and detect_supplier(row.get("Supplier URL", ""))
+                   and (detect_supplier(row.get("Supplier URL", "")) or "").lower() not in excluded_suppliers]
     skipped_incomplete = len(data) - len(processable)
     if skipped_incomplete:
-        logger.info("Skipping %d row(s) with no usable Supplier URL yet (eBay/AliExpress) - not counted against this run's batch", skipped_incomplete)
+        logger.info("Skipping %d row(s) with no usable Supplier URL or an excluded supplier - not counted against this run's batch", skipped_incomplete)
 
     # Manual runs pick ONLY unfilled rows (no Title yet) by default - the
     # Run button exists to onboard newly added products fast, not to
