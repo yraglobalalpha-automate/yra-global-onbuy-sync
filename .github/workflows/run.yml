@@ -1,8 +1,8 @@
 name: YRA Sync
 
 on:
-  schedule:
-    - cron: "19 */2 * * *"   # every 2h on an unpopular minute - GitHub drops busy-minute crons under load (observed 5-11h gaps); denser asks + odd minutes net a steadier real cadence, and the per-run batch (budget/RUNS_PER_DAY) keeps daily spend identical
+  # Semi tier retired 2026-09-26 (user decision): no schedule - the full
+  # pipeline covers this store; manual dispatch stays available.
   workflow_dispatch:
     inputs:
       recategorize:
